@@ -160,6 +160,23 @@ test('deleteWorkspace: unknown id NOT_FOUND removes nothing; a real delete casca
 
 // ---- p1t4: workspaces.metricsProject (team-metrics home) ----
 
+// ---- workspaces.scan_models_json (v57): the scan pick captured at creation ----
+
+test('createWorkspace persists a validated scanModels pick; readWorkspace returns it; a missing/blank pick stores NULL', async () => {
+  const a = await freshRepo();
+  const b = await freshRepo();
+  const c = await freshRepo();   // a NEW member set for the plain pick-less workspace (same set = DUPLICATE_SET)
+  const pick = { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max' };
+  const ws = await createWorkspace({ name: 'Models WS', projectPaths: [a, b], scanModels: pick });
+  assert.deepEqual((await readWorkspace(ws.id)).scanModels, pick);
+  const db = getDb();
+  const row = db.prepare('SELECT scan_models_json FROM workspaces WHERE id = ?').get(ws.id);
+  assert.deepEqual(JSON.parse(row.scan_models_json), pick);
+
+  const plain = await createWorkspace({ name: 'Plain WS', projectPaths: [a, c] });
+  assert.equal((await readWorkspace(plain.id)).scanModels, null);
+});
+
 test('createWorkspace metricsProject: stored and returned, null when omitted, a non-member is BAD_REQUEST', async () => {
   const a = await freshRepo();
   const b = await freshRepo();

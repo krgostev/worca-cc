@@ -60,7 +60,7 @@ const OPEN_BACKOFF_MS = 15;
 /** Latest schema version. Bump + append a new migration step when the DDL grows.
  *  Exported so migration tests assert "reached the module's current version"
  *  instead of hardcoding the number — a schema bump then touches no test file. */
-export const SCHEMA_VERSION = 56;
+export const SCHEMA_VERSION = 57;
 
 /** Absolute path to the database file: <worcaHome>/worca-cc.db. */
 export function dbPath() {
@@ -870,7 +870,8 @@ const INCREMENTAL_COLUMNS = {
                             map_json: 'TEXT',           // v40: the last scan's { map, synthesis } (workspace map); NULL = none yet
                             map_overrides_json: 'TEXT', // v40: confirm / reject / manual edge overrides; NULL = none
                             description_origin: 'TEXT',     // v40: 'generated' | 'edited'; NULL = before v40
-                            actions_json: 'TEXT' },         // v47: stack actions { stacks:[…] } (issue #529); NULL = none
+                            actions_json: 'TEXT',           // v47: stack actions { stacks:[…] } (issue #529); NULL = none
+                            scan_models_json: 'TEXT' },     // v57: the scan pick captured at creation { scanModel, scanEffort, agentModel, agentEffort }; NULL = none
   schedules:              { ask_thread_id: 'TEXT', ask_card_id: 'TEXT',   // v31: the Ask Worca card a series came from
                             created_by: 'TEXT', updated_by: 'TEXT' },   // v39: who made / last changed it (identity.mjs actor)
   scheduled_runs:         { after_kind: 'TEXT', after_id: 'TEXT', after_policy: "TEXT NOT NULL DEFAULT 'done'",

@@ -73,7 +73,7 @@ export const WORKSPACE_KEY_RE = /^wks-[a-z0-9][a-z0-9-]*-[0-9a-f]{8}$/;
 
 /** Every workspaces column a read needs (readEntry + listWorkspaces share it). */
 const WORKSPACE_COLUMNS =
-  'id, name, description, metrics_project, policy_project, map_json, map_overrides_json, description_origin, actions_json, created_at, updated_at';
+  'id, name, description, metrics_project, policy_project, map_json, map_overrides_json, description_origin, actions_json, scan_models_json, created_at, updated_at';
 
 /** description_origin values; anything else (NULL = before v40) reads as null. */
 const DESCRIPTION_ORIGINS = new Set(['generated', 'edited']);
@@ -172,6 +172,7 @@ function annotate(entry) {
     exists: pairs.map((x) => isDir(x.path)),
     metricsProject: entry.metricsProject ?? null,
     policyProject: entry.policyProject ?? null,
+    scanModels: entry.scanModels ?? null,
     // The list carries the map's counts only; the map itself is GET /api/workspaces/:id/map.
     mapSummary: mapSummary(entry.mapDoc ? entry.mapDoc.map : null, entry.overrides || emptyOverrides()),
     descriptionOrigin: entry.descriptionOrigin ?? null,
@@ -276,6 +277,7 @@ function rowToEntry(r) {
     overrides: parseOverrides(r.map_overrides_json),
     descriptionOrigin: DESCRIPTION_ORIGINS.has(r.description_origin) ? r.description_origin : null,
     stacks: parseStacks(r.actions_json),
+    scanModels: parseJsonColumn(r.scan_models_json),
     createdAt: typeof r.created_at === 'string' ? r.created_at : '',
     updatedAt: typeof r.updated_at === 'string' ? r.updated_at : '',
   };
@@ -468,6 +470,13 @@ export function checkNewWorkspace(input = {}) {
 export async function createWorkspace(input = {}) {
   const { name, members } = prepareCreate(input);
   const description = typeof input.description === 'string' ? input.description : '';
+  // A pick validated by assertWorkspaceScanInput upstream (createWorkspaceWithHomes) — copy the
+  // four fields only; null stays NULL (a workspace without a deliberate pick follows Settings).
+  const raw = input.scanModels && typeof input.scanModels === 'object' ? input.scanModels : null;
+  const scanModels = raw
+    ? { scanModel: raw.scanModel, scanEffort: raw.scanEffort ?? null, agentModel: raw.agentModel, agentEffort: raw.agentEffort }
+    : null;
+  const scanModelsJson = scanModels ? JSON.stringify(scanModels) : null;
 
   const metricsProject = memberPathFor(members, input.metricsProject ?? null);
   const policyProject = memberPathFor(members, input.policyProject ?? null, 'policyProject');
@@ -477,8 +486,8 @@ export async function createWorkspace(input = {}) {
   tx(() => {
     assertNoDuplicate(name, members);
     prepare(
-      'INSERT INTO workspaces (id, name, description, metrics_project, policy_project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, name, description, metricsProject, policyProject, now, now);
+      'INSERT INTO workspaces (id, name, description, metrics_project, policy_project, scan_models_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, name, description, metricsProject, policyProject, scanModelsJson, now, now);
     const insMember = prepare(
       'INSERT INTO workspace_projects (workspace_id, project_key, ordinal) VALUES (?, ?, ?)'
     );
@@ -488,7 +497,7 @@ export async function createWorkspace(input = {}) {
 
   // Return the annotated entry (derived fields recomputed from the persisted paths).
   return annotate({
-    id, name, description, projectPaths: members, metricsProject, policyProject, createdAt: now, updatedAt: now,
+    id, name, description, projectPaths: members, metricsProject, policyProject, scanModels, createdAt: now, updatedAt: now,
   });
 }
 

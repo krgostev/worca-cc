@@ -8427,7 +8427,7 @@ async function startAutoRescan(ws) {
   const problems = scanMemberProblems(ws.projectPaths);
   if (problems.length) return { skipped: `read-only workspace scan: ${problems.join('; ')}` };
   let models;
-  try { models = await scanModelsFor({}, ws.projectPaths); }
+  try { models = await scanModelsFor({}, ws.projectPaths, ws); }
   catch (err) { return { skipped: err && err.message ? err.message : String(err) }; }
   if (!(models && modelHasBaseUrlRouting(models.scanModel))) {
     const { state } = await probeClaudeAuth({ bin: configuredClaudeBin(), mock: isTruthy(process.env.WORCA_MOCK ?? process.env.ORCH_MOCK) });
@@ -8669,10 +8669,17 @@ async function refuseSignedOutScan(res, models) {
   return refuseSignedOutClaude(res);
 }
 
-/** The scan's models (D18): the request's pick, else Settings › Runs › Workspaces, else the
- *  defaults — checked against the primary member's catalog. Throws on a bad explicit pick (400). */
-async function scanModelsFor(body, projectPaths) {
-  return resolveScanModels({ explicit: body && body.models, stored: workspaceScanModels(), models: await listModels(primaryMemberOf(projectPaths)) });
+/** The scan's models (D18, D19): the request's pick, else the workspace's stored pick (source
+ *  'workspace' — captured at creation, reused by auto re-scans), else Settings › Runs › Workspaces,
+ *  else the defaults (only when a known catalog offers the default) — checked against the primary
+ *  member's catalog. Throws on a bad explicit pick (400) or when no model is available (D19). */
+async function scanModelsFor(body, projectPaths, workspace = null) {
+  return resolveScanModels({
+    explicit: body && body.models,
+    stored: workspaceScanModels(),
+    workspacePick: workspace && workspace.scanModels ? workspace.scanModels : null,
+    models: await listModels(primaryMemberOf(projectPaths)),
+  });
 }
 
 /** Start a scan through the ONE run handler (the defragRequest pattern). startRunHandler reads
@@ -8739,7 +8746,7 @@ app.post('/api/workspaces/:id/scan', async (req, res) => {
     const problems = scanMemberProblems(ws.projectPaths);
     if (problems.length) return badRequest(res, `read-only workspace scan: ${problems.join('; ')}`);
     let models;
-    try { models = await scanModelsFor(req.body || {}, ws.projectPaths); }
+    try { models = await scanModelsFor(req.body || {}, ws.projectPaths, ws); }
     catch (err) { return badRequest(res, err && err.message ? err.message : String(err)); }
     if (await refuseSignedOutScan(res, models)) return;
     return await scanRequest(req, res, { id: ws.id, name: ws.name, projectPaths: ws.projectPaths, rescan: true, models });

@@ -198,6 +198,24 @@ test('a first scan (with a models pick) is a recorded run that creates the works
   } finally { sock.ws.close(); }
 });
 
+test('a scan created with an explicit model pick persists it on the workspace; it survives a member-add auto rescan', async () => {
+  const a = await freshRepo();
+  const b = await freshRepo();
+  const c = await freshRepo(); // added to the workspace later
+  const pick = { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max' };
+  const created = await (await post('/api/workspaces/scan', { name: 'Auto WS', projectPaths: [a, b], models: pick })).json();
+  assert.equal((await settled(created.runId)).status, 'done', JSON.stringify(created));
+  // the wizard pick is stored on the workspace and served back through the API
+  const wsBefore = (await (await fetch(`${base}/api/workspaces/${created.workspaceId}`)).json()).workspace;
+  assert.deepEqual(wsBefore.scanModels, pick);
+
+  // A member-add auto-rescan re-reads the stored pick: it resolves (no "no workspace scan model is
+  // available" skip), a re-scan starts, and the stored pick survives the member UPDATE.
+  const changed = await (await post(`/api/workspaces/${created.workspaceId}/members`, { add: [c] })).json();
+  assert.ok(changed.rescan && changed.rescan.runId, `the member-add starts a re-scan: ${JSON.stringify(changed.rescan)}`);
+  assert.deepEqual(changed.workspace.scanModels, pick, 'the stored pick survives addWorkspaceMembers');
+});
+
 test('two first scans of the same set in the same tick: the launch reservation refuses the second', async () => {
   const a = await freshRepo();
   const b = await freshRepo();

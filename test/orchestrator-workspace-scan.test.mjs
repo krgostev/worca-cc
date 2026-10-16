@@ -205,6 +205,19 @@ test('scan models pin all three agent nodes and the investigators of both fan-ou
   assert.deepEqual([y.model, y.effort, y.fanOut], ['claude-opus-5-5', 'high', false]);
 });
 
+test('a first scan captures the explicit scanModels pick on the created workspace (readWorkspace.scanModels)', async (t) => {
+  const a = await freshRepo();
+  const b = await freshRepo();
+  const orch = createOrchestrator({
+    ...scanOpts([a, b], 'Pick Persist WS'),
+    scanModels: { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max', source: 'explicit', warning: null },
+  });
+  assert.equal((await runUntilAbort(t, orch)).status, 'done');
+  const id = workspaceKey({ name: 'Pick Persist WS', projectPaths: [a, b] });
+  const ws = await readWorkspace(id);
+  assert.deepEqual(ws.scanModels, { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max' });
+});
+
 test('a stale stored pick runs on the defaults and says so in the run log (Review Focus 5)', async () => {
   const a = await freshRepo();
   const b = await freshRepo();
@@ -293,6 +306,7 @@ test('v3 end to end (detached): read-only scan maps the npm dependency, saves th
       assert.ok(ws, 'workspace created');
       assert.equal(ws.name, 'Map WS');
       assert.match(ws.description, /## Interconnections/);
+      assert.equal(ws.scanModels, null, 'no explicit pick: the template-default scan stores nothing');
       const out = await readFile(join(orch.getState().pipelineDir, WORKSPACE_SCAN_OUTPUT_FILE), 'utf8');
       assert.equal(ws.description, out.trim());
       assert.equal(orch.state.workspaceScan.outcome, 'created');
