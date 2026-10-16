@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import {
-  workspaceKey, listWorkspaces, readWorkspace, createWorkspace,
+  workspaceKey, listWorkspaces, readWorkspace, createWorkspace, saveWorkspaceScanResult,
 } from '../src/core/workspaces.mjs';
 import { projectKey } from '../src/core/store.mjs';
 import { getDb, _resetForTests } from '../src/core/db.mjs';
@@ -175,6 +175,32 @@ test('createWorkspace persists a validated scanModels pick; readWorkspace return
 
   const plain = await createWorkspace({ name: 'Plain WS', projectPaths: [a, c] });
   assert.equal((await readWorkspace(plain.id)).scanModels, null);
+});
+
+test('saveWorkspaceScanResult lazily stores a scanModels pick when a workspace has none; never overwrites one; ignores a null pick', async () => {
+  const a = await freshRepo();
+  const b = await freshRepo();
+  const c = await freshRepo();
+  const pick = { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max' };
+  const other = { scanModel: 'claude-sonnet-5', scanEffort: 'medium', agentModel: 'sonnet', agentEffort: 'medium' };
+  const ws = await createWorkspace({ name: 'Persist On Scan WS', projectPaths: [a, b] });   // → scan_models_json NULL
+  assert.equal(ws.scanModels, null, 'a plain create stores no pick (pre-v57 legacy shape)');
+
+  // A scan result carrying the resolved snapshot establishes the pick…
+  await saveWorkspaceScanResult(ws.id, { description: '# Workspace: P\n', scanModels: pick });
+  assert.deepEqual((await readWorkspace(ws.id)).scanModels, pick, 'the snapshot became the workspace pick');
+  const row1 = getDb().prepare('SELECT scan_models_json, updated_at FROM workspaces WHERE id = ?').get(ws.id);
+  assert.deepEqual(JSON.parse(row1.scan_models_json), pick, 'raw row persisted');
+  assert.ok(row1.updated_at, 'the pick UPDATE stamps updated_at');
+
+  // …only once: a later snapshot never overwrites the stored pick…
+  await saveWorkspaceScanResult(ws.id, { description: '# Workspace: P2\n', scanModels: other });
+  assert.deepEqual((await readWorkspace(ws.id)).scanModels, pick, 're-scans keep the stored pick');
+
+  // …and a result without a snapshot leaves a NULL pick alone.
+  const plain = await createWorkspace({ name: 'Plain2 WS', projectPaths: [a, c] });
+  await saveWorkspaceScanResult(plain.id, { description: '# Workspace: Plain2\n' });
+  assert.equal((await readWorkspace(plain.id)).scanModels, null, 'no snapshot, nothing persisted');
 });
 
 test('createWorkspace metricsProject: stored and returned, null when omitted, a non-member is BAD_REQUEST', async () => {

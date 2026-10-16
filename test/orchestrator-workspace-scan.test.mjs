@@ -218,6 +218,26 @@ test('a first scan captures the explicit scanModels pick on the created workspac
   assert.deepEqual(ws.scanModels, { scanModel: 'claude-opus-5-5', scanEffort: 'high', agentModel: 'fable', agentEffort: 'max' });
 });
 
+test('an existing pick-less workspace captures the scan\'s resolved snapshot as its pick (v57-era workspaces; outcome updated)', async (t) => {
+  const a = await freshRepo();
+  const b = await freshRepo();
+  // Pre-fix workspace: created WITHOUT a pick → scan_models_json NULL.
+  const ws = await createWorkspace({ name: 'Legacy Pick WS', projectPaths: [a, b] });
+  assert.equal(ws.scanModels, null, 'legacy shape: no stored pick');
+  const opts = scanOpts([a, b], 'Legacy Pick WS');
+  assert.equal(opts.workspace.id, ws.id);
+  // What scanModelsFor hands back for a NULL-pick workspace with no Settings pick: the default.
+  const orch = createOrchestrator({
+    ...opts,
+    scanModels: { scanModel: 'claude-sonnet-5', scanEffort: 'medium', agentModel: 'sonnet', agentEffort: 'medium', source: 'default', warning: null },
+  });
+  assert.equal((await runUntilAbort(t, orch)).status, 'done');
+  assert.equal(orch.state.workspaceScan.outcome, 'updated');
+  const saved = await readWorkspace(ws.id);
+  assert.deepEqual(saved.scanModels, { scanModel: 'claude-sonnet-5', scanEffort: 'medium', agentModel: 'sonnet', agentEffort: 'medium' },
+    'the resolved snapshot became the workspace pick, so the next scan reuses it');
+});
+
 test('a stale stored pick runs on the defaults and says so in the run log (Review Focus 5)', async () => {
   const a = await freshRepo();
   const b = await freshRepo();

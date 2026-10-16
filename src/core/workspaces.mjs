@@ -460,6 +460,24 @@ export function checkNewWorkspace(input = {}) {
 }
 
 /**
+ * The stored form of a scan-model pick: the four fields only, stripped of the resolution
+ * metadata (source/warning) that resolveScanModels adds at launch. null for nothing to store.
+ * Shared by createWorkspace, the scan finalize's create branch and its existing-workspace
+ * effective snapshot (v58) — one serialization. Behavior-identical to the inline 4-field copy
+ * in createWorkspace / the finalize create branch it replaces (object check + `?? null` on
+ * scanEffort), so callers keep their own gating (e.g. the create branch persists explicit
+ * picks only).
+ * @param {object|null} input
+ * @returns {object|null}
+ */
+export function scanModelsPick(input) {
+  const raw = input && typeof input === 'object' ? input : null;
+  return raw
+    ? { scanModel: raw.scanModel, scanEffort: raw.scanEffort ?? null, agentModel: raw.agentModel, agentEffort: raw.agentEffort }
+    : null;
+}
+
+/**
  * Create a workspace (rules: checkNewWorkspace, re-checked inside the write). Persists the
  * workspaces row + ordered workspace_projects member rows (member PATH stored in the
  * project_key column) in ONE tx(). id is the frozen workspaceKey, computed once. Returns the
@@ -472,10 +490,7 @@ export async function createWorkspace(input = {}) {
   const description = typeof input.description === 'string' ? input.description : '';
   // A pick validated by assertWorkspaceScanInput upstream (createWorkspaceWithHomes) — copy the
   // four fields only; null stays NULL (a workspace without a deliberate pick follows Settings).
-  const raw = input.scanModels && typeof input.scanModels === 'object' ? input.scanModels : null;
-  const scanModels = raw
-    ? { scanModel: raw.scanModel, scanEffort: raw.scanEffort ?? null, agentModel: raw.agentModel, agentEffort: raw.agentEffort }
-    : null;
+  const scanModels = scanModelsPick(input.scanModels);
   const scanModelsJson = scanModels ? JSON.stringify(scanModels) : null;
 
   const metricsProject = memberPathFor(members, input.metricsProject ?? null);
@@ -732,11 +747,11 @@ export async function readWorkspaceMap(id) {
  * redacts every string it keeps (D21 — the synthesizer is an LLM that may quote a credential it
  * read in a checkout), so every writer, finalize or a direct caller, stores the same safe shape.
  * @param {string} id
- * @param {{description?:string, map?:object|null, synthesis?:object|null}} result
+ * @param {{description?:string, map?:object|null, synthesis?:object|null, scanModels?:object|null}} result
  * @returns {Promise<object>} the annotated workspace
  * @throws err(code: NOT_FOUND)
  */
-export async function saveWorkspaceScanResult(id, { description = '', map = null, synthesis = null } = {}) {
+export async function saveWorkspaceScanResult(id, { description = '', map = null, synthesis = null, scanModels = null } = {}) {
   getDb();
   // Member keys are computed before the write lock is taken (projectKey may spawn git). A member
   // change blocks while a scan owns the workspace (the server's live-run guard), so they hold for
@@ -745,6 +760,7 @@ export async function saveWorkspaceScanResult(id, { description = '', map = null
   const checked = synthesis === null ? null : checkSynthesis(synthesis, { memberKeys }).value;
   const mapDoc = isWorkspaceMap(map) ? { map, synthesis: checked } : null;
   const now = new Date().toISOString();
+  const pick = scanModelsPick(scanModels);   // store the four fields only, never resolution metadata
   const entry = tx(() => {
     const cur = readEntry(id);
     if (!cur) throw err(`workspace not found: ${id}`, 'NOT_FOUND');
@@ -754,7 +770,18 @@ export async function saveWorkspaceScanResult(id, { description = '', map = null
     prepare('UPDATE workspaces SET description = ?, map_json = ?, description_origin = ?, updated_at = ? WHERE id = ?')
       .run(text, mapDoc ? JSON.stringify(mapDoc) : null, 'generated', now, id);
     if (overrides !== cur.overrides) prepare('UPDATE workspaces SET map_overrides_json = ? WHERE id = ?').run(JSON.stringify(overrides), id);
-    return { ...cur, overrides, description: text, mapDoc, descriptionOrigin: 'generated', updatedAt: now };
+    // v58: lazily establish the pick of an EXISTING workspace that has none (every workspace created
+    // before v57) from the scan's resolved snapshot, so the next add/re-scan reuses it instead of
+    // re-falling to settings/default. A stored pick is never overwritten; the CREATE path keeps its
+    // own write (createWorkspace) — this param is simply not passed there (finalize computes
+    // `existing ? scanModelsPick(models) : null`). cur is re-read inside this write lock, so a pick
+    // landing mid-finalize is respected, never clobbered.
+    let savedScanModels = cur.scanModels;
+    if (!cur.scanModels && pick) {
+      prepare('UPDATE workspaces SET scan_models_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(pick), now, id);
+      savedScanModels = pick;
+    }
+    return { ...cur, scanModels: savedScanModels, overrides, description: text, mapDoc, descriptionOrigin: 'generated', updatedAt: now };
   });
   return annotate(entry);
 }

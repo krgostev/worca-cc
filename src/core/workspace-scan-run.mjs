@@ -14,7 +14,7 @@ import { copyFile, lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
-  checkNewWorkspace, createWorkspace, readWorkspace, saveWorkspaceScanResult, isWorkspaceMap, rootsHash,
+  checkNewWorkspace, createWorkspace, readWorkspace, saveWorkspaceScanResult, isWorkspaceMap, rootsHash, scanModelsPick,
 } from './workspaces.mjs';
 import { workspaceStorePath } from './store.mjs';
 import { autoMetricsHome } from './metrics/sync.mjs';
@@ -231,6 +231,12 @@ export async function finalizeWorkspaceScan({ workspaceId, name, projectPaths, p
     if (existing && rootsHash(existing.projectPaths) !== rootsHash(projectPaths)) {
       return { outcome: 'failed', workspaceId, error: 'the workspace\'s members changed while the scan ran; nothing saved (a re-scan of the new set replaces it)', code: 'SET_CHANGED' };
     }
+    // For an EXISTING workspace with no stored pick — every workspace created before v57 — the scan's
+    // resolved snapshot (Settings › Runs › Workspaces or the default fallback; effective-snapshot
+    // decision) becomes the workspace pick, persisted lazily on this scan (saveWorkspaceScanResult:
+    // nothing stored on a pick the workspace already has; nothing storable on a resume, models null).
+    // The CREATE branch below keeps its own v57 gate (explicit picks only) and stores via the INSERT.
+    const resolvedPick = existing ? scanModelsPick(models) : null;
     if (!existing) {
       // The run is filed under the id the launch froze (scan D3): a workspace created under any
       // other id — a member's repository root moved while the scan ran — would never list it.
@@ -241,15 +247,14 @@ export async function finalizeWorkspaceScan({ workspaceId, name, projectPaths, p
       // Persist the wizard's deliberate pick (explicit only) on creation — a scan that fell through
       // to settings/defaults must not bake those into the workspace. Re-scans keep the stored pick.
       const scanModels = models && models.source === 'explicit'
-        ? { scanModel: models.scanModel, scanEffort: models.scanEffort ?? null,
-            agentModel: models.agentModel, agentEffort: models.agentEffort }
+        ? scanModelsPick(models)
         : null;
       const { workspace } = await createWorkspaceWithHomes({ name, projectPaths, description, scanModels });
       id = workspace.id;
       outcome = 'created';
     }
     const map = scan ? await adoptGraphFile(scan.map, { pipelineDir, storeDir: workspaceStorePath(id) }) : null;
-    await saveWorkspaceScanResult(id, { description, map, synthesis: scan ? scan.synthesis : null });
+    await saveWorkspaceScanResult(id, { description, map, synthesis: scan ? scan.synthesis : null, scanModels: resolvedPick });
     return { outcome, workspaceId: id };
   } catch (err) {
     return { outcome: 'failed', workspaceId, error: (err && err.message) || String(err), code: (err && err.code) || null };

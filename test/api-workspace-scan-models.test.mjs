@@ -94,3 +94,23 @@ test('Re-scan starts on the stored pick', async () => {
   assert.deepEqual([n.model, n.effort, n.subagentModel, n.subagentEffort], ['claude-opus-5-5', 'high', 'opus', 'xhigh']);
   await post('/api/settings', { workspaceScan: null });
 });
+
+test('a member-add auto-rescan establishes the pick on a pick-less workspace (the "add a new agent" bug)', async () => {
+  await post('/api/settings', { workspaceScan: PICK });
+  const a = await freshRepo();
+  const b = await freshRepo();
+  const c = await freshRepo();   // the new agent being added
+  const { workspace } = await (await post('/api/workspaces', { name: 'Legacy Add', projectPaths: [a, b] })).json();
+  assert.equal(workspace.scanModels, null, 'pre-fix workspace: no stored pick');
+  // member-add auto-rescan resolves the Settings pick (workspace pick NULL) and, on completion,
+  // must persist it as the workspace's effective snapshot. The members route answers
+  // { workspace, clearedHomes, rescan } — rescan is { runId } | { skipped: reason }.
+  const changed = await (await post(`/api/workspaces/${workspace.id}/members`, { add: [c] })).json();
+  assert.ok(changed.rescan && changed.rescan.runId, `member-add starts the auto-rescan: ${JSON.stringify(changed.rescan)}`);
+  const done = await untilSettled(changed.rescan.runId);
+  assert.equal(done.status, 'done', `auto-rescan ${changed.rescan.runId} settled with ${done.status}`);
+  // GET /api/workspaces/:id answers { workspace } — withRescan spreads the workspace fields.
+  const after = (await (await fetch(`${base}/api/workspaces/${workspace.id}`)).json()).workspace;
+  assert.deepEqual(after.scanModels, PICK, 'the resolved snapshot (the Settings pick) is now the workspace pick');
+  await post('/api/settings', { workspaceScan: null });
+});
